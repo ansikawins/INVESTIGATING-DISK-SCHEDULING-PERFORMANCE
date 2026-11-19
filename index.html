@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Investigating Disk Scheduling Performance</title>
+<style>
+:root{--bg:#0a1230;--bg2:#101a42;--card:#16215a;--text:#e8ecff;--mut:#9fb0e0;--pu:#8b5cf6;--cy:#22d3ee;--bd:#2a3a82;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+:root[data-theme=light]{--bg:#f3f6ff;--bg2:#e6ecff;--card:#fff;--text:#14204f;--mut:#51608f;--pu:#6d3fe0;--cy:#0891b2;--bd:#cfd8f5;color-scheme:light}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:70px}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;transition:background .3s}
+.wrap{max-width:1100px;margin:auto;padding:0 18px}
+section{padding:64px 0}section:nth-of-type(even){background:var(--bg2)}
+h1,h2,h3{line-height:1.2;margin:0 0 .6em}
+h2{font-size:clamp(1.6rem,4vw,2.2rem)}h2 span,.grad{background:linear-gradient(90deg,var(--pu),var(--cy));-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{color:var(--mut);max-width:680px}
+nav{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--bd)}
+nav .wrap{display:flex;align-items:center;gap:14px;min-height:58px;flex-wrap:wrap}
+.brand{font-weight:800;margin-right:auto}.links{display:flex;gap:4px;flex-wrap:wrap}
+.links a{color:var(--mut);text-decoration:none;padding:6px 10px;border-radius:8px;font-size:.88rem}.links a:hover{color:var(--text);background:var(--card)}
+#menu{display:none}
+@media(max-width:860px){#menu{display:inline-block}.links{display:none;width:100%;flex-direction:column}.links.open{display:flex}}
+.btn{border:0;cursor:pointer;font:inherit;font-weight:600;padding:10px 20px;border-radius:10px;color:#fff;background:linear-gradient(90deg,var(--pu),var(--cy));text-decoration:none;display:inline-block;transition:transform .2s,box-shadow .2s}
+.btn:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(34,211,238,.3)}
+.btn.o{background:transparent;border:1px solid var(--bd);color:var(--text)}
+.grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:22px;transition:transform .25s,border-color .25s}
+.card:hover{transform:translateY(-4px);border-color:var(--cy)}
+.ic{font-size:1.8rem}.tag{display:inline-block;font-size:.75rem;padding:2px 10px;border-radius:99px;background:rgba(139,92,246,.2);color:var(--cy);margin-bottom:8px}
+.hero{display:grid;gap:30px;grid-template-columns:1.1fr .9fr;align-items:center;min-height:80vh}
+@media(max-width:800px){.hero{grid-template-columns:1fr;text-align:center}.hero .sub{margin:auto}}
+.hero h1{font-size:clamp(2rem,6vw,3.4rem)}
+@keyframes spin{to{transform:rotate(360deg)}}@keyframes fade{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
+.disk{animation:spin 14s linear infinite;transform-origin:150px 150px}.rv{animation:fade .8s both}
+label{font-size:.85rem;color:var(--mut);display:block;margin-bottom:4px}
+input,select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--text);font:inherit}
+input:focus,select:focus{outline:2px solid var(--cy)}
+.form{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}.full{grid-column:1/-1}
+.err{display:none;background:rgba(239,68,68,.15);border:1px solid #ef4444;color:#fca5a5;padding:10px 14px;border-radius:10px;margin-top:14px}
+:root[data-theme=light] .err{color:#b91c1c}
+.stats{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:18px}
+.stat b{display:block;font-size:1.7rem;color:var(--cy)}
+.seq{word-break:break-word;font-family:ui-monospace,Menlo,monospace;font-size:.9rem;color:var(--mut)}
+.tw{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:520px}
+th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--bd)}th{color:var(--cy);font-size:.85rem}
+tr.best{background:rgba(34,211,238,.15)}tr.best td:first-child::after{content:" ★ Best";color:var(--cy);font-weight:700}
+.cv{position:relative;height:320px}
+ul.pc{padding-left:18px;margin:6px 0;color:var(--mut)}.pro{color:#34d399}.con{color:#f87171}
+details{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px 18px;margin-bottom:10px}
+summary{cursor:pointer;font-weight:600}details p{color:var(--mut);margin:.6em 0 0}
+footer{text-align:center;padding:28px 18px;color:var(--mut);border-top:1px solid var(--bd)}
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+<div class="brand grad">💽 DiskSched Lab</div>
+<button class="btn o" id="menu" aria-label="Menu">☰</button>
+<div class="links" id="links">
+<a href="#home">Home</a><a href="#about">About</a><a href="#algos">Algorithms</a><a href="#sim">Simulation</a><a href="#compare">Comparison</a><a href="#graphs">Graphs</a><a href="#results">Results</a><a href="#learn">Learn More</a>
+</div>
+<button class="btn o" id="theme">🌙/☀️</button>
+</div></nav>
+
+<section id="home"><div class="wrap hero">
+<div class="rv"><span class="tag">Operating Systems · CSE Project</span>
+<h1>Investigating <span class="grad">Disk Scheduling</span> Performance</h1>
+<p class="sub">A hard disk can serve only one request at a time, so the order matters. Explore six scheduling algorithms, run live simulations and compare their head movement using tables and graphs.</p>
+<p><a class="btn" href="#sim">Get Started →</a> <a class="btn o" href="#algos">View Algorithms</a></p></div>
+<svg viewBox="0 0 300 300" style="width:100%;max-width:380px;margin:auto" aria-label="Disk illustration">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8b5cf6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+<g class="disk"><circle cx="150" cy="150" r="130" fill="#101a42" stroke="url(#g)" stroke-width="4"/>
+<circle cx="150" cy="150" r="100" fill="none" stroke="#8b5cf6" stroke-opacity=".6" stroke-dasharray="6 6"/>
+<circle cx="150" cy="150" r="70" fill="none" stroke="#22d3ee" stroke-opacity=".6" stroke-dasharray="6 6"/>
+<circle cx="150" cy="150" r="40" fill="none" stroke="#8b5cf6" stroke-opacity=".6" stroke-dasharray="6 6"/>
+<circle cx="150" cy="150" r="14" fill="url(#g)"/></g>
+<path d="M285 40 L190 120" stroke="#e8ecff" stroke-width="7" stroke-linecap="round"/><circle cx="285" cy="40" r="9" fill="#22d3ee"/><circle cx="188" cy="122" r="6" fill="#8b5cf6"/>
+</svg></div></section>
+
+<section id="about"><div class="wrap">
+<h2>About <span>Disk Scheduling</span></h2>
+<p class="sub">Disk scheduling is the method an operating system uses to decide the order in which pending disk I/O requests are served. The goal is to reduce <b>seek time</b>, the time the read/write head spends moving between cylinders.</p>
+<div class="grid" style="margin-top:24px">
+<div class="card"><div class="ic">⚡</div><h3>Why it matters</h3><p class="sub">Less head movement means faster response, higher throughput and less wear on the disk.</p></div>
+<div class="card"><div class="ic">⚖️</div><h3>Fairness</h3><p class="sub">A good algorithm avoids starvation, where some requests wait too long.</p></div>
+<div class="card"><div class="ic">🎯</div><h3>Objectives</h3><ul class="pc"><li>Understand six algorithms</li><li>Simulate seek sequences</li><li>Compare total head movement</li><li>Find the best for any input</li></ul></div>
+</div></div></section>
+
+<section id="algos"><div class="wrap">
+<h2>Disk Scheduling <span>Algorithms</span></h2>
+<div class="grid" style="margin-top:24px">
+<div class="card"><span class="tag">FCFS</span><h3>First Come First Serve</h3><p class="sub">Serves requests exactly in arrival order. Simple and fair, but the head may swing back and forth a lot.</p></div>
+<div class="card"><span class="tag">SSTF</span><h3>Shortest Seek Time First</h3><p class="sub">Always picks the request closest to the current head position. Low movement, but far requests may starve.</p></div>
+<div class="card"><span class="tag">SCAN</span><h3>Elevator Algorithm</h3><p class="sub">Head moves in one direction to the disk end, serving requests on the way, then reverses.</p></div>
+<div class="card"><span class="tag">C-SCAN</span><h3>Circular SCAN</h3><p class="sub">Like SCAN, but after reaching one end the head jumps to the other end and keeps scanning in the same direction.</p></div>
+<div class="card"><span class="tag">LOOK</span><h3>LOOK</h3><p class="sub">Like SCAN, but the head only goes as far as the last request in each direction, not to the disk end.</p></div>
+<div class="card"><span class="tag">C-LOOK</span><h3>Circular LOOK</h3><p class="sub">Like C-SCAN, but jumps from the last request to the first request on the other side.</p></div>
+</div></div></section>
+
+<section id="sim"><div class="wrap">
+<h2>Interactive <span>Simulation</span></h2>
+<p class="sub">Enter your own values or use the sample data, then run the simulation. Everything below updates automatically.</p>
+<div class="card" style="margin-top:20px">
+<div class="form">
+<div class="full"><label for="q">Request queue (comma or space separated)</label><input id="q" value="98, 183, 37, 122, 14, 124, 65, 67"></div>
+<div><label for="h">Starting head position</label><input id="h" type="number" value="53"></div>
+<div><label for="mn">Minimum cylinder</label><input id="mn" type="number" value="0"></div>
+<div><label for="mx">Maximum cylinder</label><input id="mx" type="number" value="199"></div>
+<div><label for="d">Direction</label><select id="d"><option value="up">Towards higher (right)</option><option value="down">Towards lower (left)</option></select></div>
+<div><label for="a">Algorithm to display</label><select id="a"></select></div>
+</div>
+<div class="err" id="err" role="alert"></div>
+<p style="margin:18px 0 0;display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="run">▶ Run Simulation</button><button class="btn o" id="sample">Load Sample</button><button class="btn o" id="reset">Reset</button><button class="btn o" id="clear">Clear</button></p>
+</div>
+<div class="card" style="margin-top:18px">
+<h3 id="stTitle">Result</h3>
+<div class="seq" id="seq"></div>
+<div class="stats"><div class="card stat"><b id="tot">–</b>Total head movement</div><div class="card stat"><b id="ops">–</b>Seek operations</div><div class="card stat"><b id="avg">–</b>Avg seek distance</div></div>
+</div></div></section>
+
+<section id="compare"><div class="wrap">
+<h2>Performance <span>Comparison</span></h2>
+<p class="sub">All six algorithms on the same input. Average seek distance = total head movement ÷ number of requests. C-SCAN and C-LOOK count the return jump.</p>
+<div class="card tw" style="margin-top:20px"><table><thead><tr><th>Algorithm</th><th>Total head movement</th><th>Avg seek distance</th><th>Seek operations</th></tr></thead><tbody id="tb"></tbody></table></div>
+</div></section>
+
+<section id="graphs"><div class="wrap">
+<h2>Graphical <span>Analysis</span></h2>
+<div class="grid" style="margin-top:20px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+<div class="card"><h3>Total head movement</h3><div class="cv"><canvas id="bar"></canvas></div></div>
+<div class="card"><h3 id="lnTitle">Seek sequence</h3><div class="cv"><canvas id="line"></canvas></div><p class="sub" style="font-size:.85rem">Hover over a point to see the cylinder. Change the algorithm in the simulation form.</p></div>
+</div></div></section>
+
+<section id="results"><div class="wrap">
+<h2>Results and <span>Observations</span></h2>
+<div class="grid" style="margin-top:20px">
+<div class="card"><div class="ic">🏆</div><h3>Best performer</h3><p id="best" class="sub"></p></div>
+<div class="card"><div class="ic">🔍</div><h3>Differences</h3><ul class="pc" id="diff"></ul></div>
+<div class="card"><div class="ic">📝</div><h3>Conclusion</h3><p id="concl" class="sub"></p></div>
+</div></div></section>
+
+<section id="learn"><div class="wrap">
+<h2>Learn <span>More</span></h2>
+<div class="grid" style="margin-top:20px">
+<div class="card"><h3>Key terms</h3><ul class="pc"><li><b>Cylinder:</b> a track position on the disk.</li><li><b>Seek time:</b> time to move the head to a cylinder.</li><li><b>Head movement:</b> total cylinders crossed.</li><li><b>Starvation:</b> a request waits indefinitely.</li></ul></div>
+<div class="card"><h3>FCFS</h3><ul class="pc"><li class="pro">+ Simple, fair</li><li class="con">− High head movement</li></ul><h3>SSTF</h3><ul class="pc"><li class="pro">+ Low average seek time</li><li class="con">− Can starve far requests</li></ul></div>
+<div class="card"><h3>SCAN / C-SCAN</h3><ul class="pc"><li class="pro">+ No starvation, good under heavy load</li><li class="con">− Travels to disk ends; C-SCAN adds a jump</li></ul><h3>LOOK / C-LOOK</h3><ul class="pc"><li class="pro">+ Avoids useless trips to the ends</li><li class="con">− Slightly more complex</li></ul></div>
+</div>
+<h3 style="margin-top:28px">Frequently asked questions</h3>
+<details><summary>Which algorithm is always the best?</summary><p>None. It depends on the request pattern. SSTF or LOOK often win on random loads, while C-SCAN and C-LOOK give more uniform waiting times.</p></details>
+<details><summary>What is the difference between SCAN and LOOK?</summary><p>SCAN always travels to the end of the disk. LOOK turns around at the last request.</p></details>
+<details><summary>Why do the circular versions exist?</summary><p>They serve requests in only one direction, so waiting time is more uniform for requests at the edges.</p></details>
+<details><summary>How is total head movement calculated?</summary><p>It is the sum of absolute differences between consecutive cylinders in the seek sequence.</p></details>
+</div></section>
+
+<footer>Investigating Disk Scheduling Performance · Operating Systems mini project</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const NAMES=["FCFS","SSTF","SCAN","C-SCAN","LOOK","C-LOOK"];
+const SAMPLE={q:"98, 183, 37, 122, 14, 124, 65, 67",h:53,mn:0,mx:199,d:"up"};
+NAMES.forEach(n=>$("a").add(new Option(n,n)));
+
+function algo(name,reqs,head,mn,mx,dir){
+  const asc=(a,b)=>a-b,desc=(a,b)=>b-a,up=dir==="up";
+  const lo=reqs.filter(x=>x<head),hi=reqs.filter(x=>x>=head);
+  const s=[head];
+  if(name==="FCFS")s.push(...reqs);
+  else if(name==="SSTF"){let p=[...reqs],c=head;while(p.length){let k=0;p.forEach((x,i)=>{if(Math.abs(x-c)<Math.abs(p[k]-c))k=i});c=p.splice(k,1)[0];s.push(c)}}
+  else{
+    const A=hi.sort(asc),B=lo.sort(desc);           // ahead going up / behind going down
+    const D=reqs.filter(x=>x<=head).sort(desc),U=reqs.filter(x=>x>head).sort(asc);
+    const first=up?[...hi].sort(asc):D;
+    const second=up?B:U;
+    const end=up?mx:mn,other=up?mn:mx;
+    if(name==="SCAN"){s.push(...first);if(s[s.length-1]!==end)s.push(end);s.push(...second)}
+    else if(name==="LOOK"){s.push(...first,...second)}
+    else if(name==="C-SCAN"){const rest=up?[...lo].sort(asc):[...U].sort(desc);s.push(...first);if(s[s.length-1]!==end)s.push(end);if(rest.length){s.push(other,...rest)}}
+    else if(name==="C-LOOK"){const rest=up?[...lo].sort(asc):[...U].sort(desc);s.push(...first,...rest)}
+  }
+  const clean=s.filter((v,i)=>i===0||v!==s[i-1]||true);
+  let tot=0;for(let i=1;i<clean.length;i++)tot+=Math.abs(clean[i]-clean[i-1]);
+  return{name,seq:clean,total:tot,ops:clean.length-1,avg:reqs.length?tot/reqs.length:0};
+}
+
+function read(){
+  const raw=$("q").value.trim(),mn=parseInt($("mn").value),mx=parseInt($("mx").value),h=parseInt($("h").value);
+  if(!raw)return"Please enter at least one request.";
+  const parts=raw.split(/[\s,]+/).filter(Boolean);
+  if(parts.some(p=>!/^-?\d+$/.test(p)))return"The queue must contain whole numbers only, separated by commas or spaces.";
+  if([mn,mx,h].some(Number.isNaN))return"Head position, minimum and maximum must be numbers.";
+  if(mn>=mx)return"Minimum cylinder must be less than maximum cylinder.";
+  if(mn<0)return"Cylinder values cannot be negative.";
+  if(h<mn||h>mx)return"Head position must be between "+mn+" and "+mx+".";
+  const reqs=parts.map(Number),bad=reqs.find(x=>x<mn||x>mx);
+  if(bad!==undefined)return"Request "+bad+" is outside the range "+mn+" to "+mx+".";
+  if(reqs.length>60)return"Please enter at most 60 requests.";
+  return{reqs,h,mn,mx,d:$("d").value};
+}
+
+let bar,line,last=null;
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function run(){
+  const r=read(),e=$("err");
+  if(typeof r==="string"){e.textContent="⚠ "+r;e.style.display="block";return}
+  e.style.display="none";
+  const all=NAMES.map(n=>algo(n,[...r.reqs],r.h,r.mn,r.mx,r.d));
+  last={all,sel:$("a").value,r};
+  render();
+}
+
+function render(){
+  if(!last)return;
+  const{all,sel}=last,cur=all.find(x=>x.name===sel),min=Math.min(...all.map(x=>x.total));
+  $("stTitle").textContent=sel+" result";
+  $("seq").innerHTML="<b>Seek sequence:</b> "+cur.seq.join(" → ");
+  $("tot").textContent=cur.total;$("ops").textContent=cur.ops;$("avg").textContent=cur.avg.toFixed(2);
+  $("tb").innerHTML=all.map(x=>`<tr class="${x.total===min?"best":""}"><td>${x.name}</td><td>${x.total}</td><td>${x.avg.toFixed(2)}</td><td>${x.ops}</td></tr>`).join("");
+  // results text
+  const bests=all.filter(x=>x.total===min).map(x=>x.name),worst=all.reduce((a,b)=>b.total>a.total?b:a);
+  const save=worst.total?Math.round((1-min/worst.total)*100):0;
+  $("best").innerHTML=`<b style="color:var(--cy)">${bests.join(" & ")}</b> gave the lowest head movement of <b>${min}</b> cylinders for this input.`;
+  const g=n=>all.find(x=>x.name===n).total;
+  $("diff").innerHTML=`<li>FCFS moved ${g("FCFS")} cylinders because it ignores head position.</li><li>SSTF moved ${g("SSTF")} by always choosing the nearest request.</li><li>SCAN (${g("SCAN")}) vs LOOK (${g("LOOK")}): LOOK saves the trip to the disk ends.</li><li>C-SCAN (${g("C-SCAN")}) vs C-LOOK (${g("C-LOOK")}): both include a return jump.</li>`;
+  $("concl").textContent=`For this request set, ${bests[0]} is the most efficient, saving about ${save}% head movement compared with ${worst.name}, the highest at ${worst.total}. Results change with the queue, so try different inputs.`;
+  // charts
+  const tc=css("--mut"),gc=css("--bd");
+  const cols=all.map(x=>x.total===min?"#22d3ee":"#8b5cf6");
+  bar&&bar.destroy();line&&line.destroy();
+  const sc={x:{ticks:{color:tc},grid:{color:gc}},y:{ticks:{color:tc},grid:{color:gc},beginAtZero:true}};
+  bar=new Chart($("bar"),{type:"bar",data:{labels:NAMES,datasets:[{label:"Total head movement",data:all.map(x=>x.total),backgroundColor:cols,borderRadius:8}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:tc}}},scales:sc}});
+  $("lnTitle").textContent=sel+" seek sequence";
+  line=new Chart($("line"),{type:"line",data:{labels:cur.seq.map((_,i)=>i),datasets:[{label:"Cylinder",data:cur.seq,borderColor:"#22d3ee",backgroundColor:"rgba(139,92,246,.25)",pointBackgroundColor:"#8b5cf6",pointRadius:5,tension:0,fill:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:tc}}},scales:{x:{title:{display:true,text:"Step",color:tc},ticks:{color:tc},grid:{color:gc}},y:{title:{display:true,text:"Cylinder",color:tc},ticks:{color:tc},grid:{color:gc}}}}});
+}
+
+function fill(v){$("q").value=v.q;$("h").value=v.h;$("mn").value=v.mn;$("mx").value=v.mx;$("d").value=v.d}
+$("run").onclick=run;$("a").onchange=()=>{if(last){last.sel=$("a").value;render()}};
+$("sample").onclick=()=>{fill(SAMPLE);run()};
+$("reset").onclick=()=>{fill(SAMPLE);$("a").value="FCFS";run()};
+$("clear").onclick=()=>{fill({q:"",h:"",mn:"",mx:"",d:"up"});$("err").style.display="none";$("seq").textContent="";["tot","ops","avg"].forEach(i=>$(i).textContent="–")};
+document.querySelectorAll("#sim input,#sim select").forEach(el=>el.addEventListener("keydown",ev=>{if(ev.key==="Enter")run()}));
+$("menu").onclick=()=>$("links").classList.toggle("open");
+$("links").onclick=ev=>{if(ev.target.tagName==="A")$("links").classList.remove("open")};
+const root=document.documentElement;
+root.dataset.theme=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";
+$("theme").onclick=()=>{root.dataset.theme=root.dataset.theme==="dark"?"light":"dark";render()};
+run();
+</script>
+</body>
+</html>
